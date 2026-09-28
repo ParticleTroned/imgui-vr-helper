@@ -91,8 +91,37 @@ namespace ImGuiVRHelper::RuntimeOverlay
 		// mode, the input thread (ApplyToRuntime's CreateOverlay failure path).
 		std::atomic<bool> g_failLogged{ false };
 
+		// True on a null / headless SteamVR driver, where the overlay
+		// subsystem is only half-initialized and IVROverlay calls walk into
+		// garbage inside vrclient (access violation on an NVIDIA driver
+		// worker thread, no Skyrim/plugin frames). Detected once via the
+		// HMD's tracking-system name.
+		bool IsNullDriver(const Util::OpenVRContext& ctx)
+		{
+			char buf[vr::k_unMaxPropertyStringSize] = {};
+			vr::ETrackedPropertyError perr = vr::TrackedProp_Success;
+			ctx.system->GetStringTrackedDeviceProperty(
+				vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_TrackingSystemName_String,
+				buf, sizeof(buf), &perr);
+			return perr == vr::TrackedProp_Success && _stricmp(buf, "null") == 0;
+		}
+
 		SubmitThread DecideSubmitThread()
 		{
+			// Null / headless driver: the overlay subsystem isn't safe to touch
+			// on any thread. Checked first, ahead of the vrclient probe below,
+			// so runtime-overlay hosting never even attempts a
+			// CreateOverlay/SetOverlayTexture call.
+			{
+				Util::OpenVRContext ctx;
+				if (ctx.IsValid() && IsNullDriver(ctx)) {
+					logs::info(
+						"RuntimeOverlay: null-driver / headless SteamVR detected; staying "
+						"in-scene");
+					return SubmitThread::Disabled;
+				}
+			}
+
 			// SteamVR: IVROverlay calls must stay off the render thread (the
 			// vrclient contention race). Check vrclient_x64.dll live rather
 			// than trust VRDetection::LastResult() -- that's a one-shot probe
