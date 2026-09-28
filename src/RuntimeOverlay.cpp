@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <atomic>
 #include <mutex>
+#include <vector>
 
 namespace ImGuiVRHelper::RuntimeOverlay
 {
@@ -81,6 +82,21 @@ namespace ImGuiVRHelper::RuntimeOverlay
 		UINT g_stagingW = 0;
 		UINT g_stagingH = 0;
 		int g_stagingNext = 0;
+
+		// Staging textures just replaced by a resize, kept alive briefly
+		// instead of being destroyed on the spot: the compositor reads the
+		// shared handle cross-process and asynchronously, so it may still be
+		// mid-copy from the outgoing pair. Releasing GPU memory it's still
+		// reading is a plausible source of a same-shaped driver-worker-thread
+		// access violation on headsets whose compositor keeps more background
+		// copy/encode threads busy (e.g. foveated streaming).
+		struct RetiringTexture
+		{
+			winrt::com_ptr<ID3D11Texture2D> tex;
+			int framesLeft;
+		};
+		std::vector<RetiringTexture> g_retiringStaging;
+		constexpr int kStagingRetireFrames = 4;
 
 		// True once the submitting thread has the overlays shown; feeds
 		// IsHostingPanel so the in-scene panel pass only stands down after the
@@ -368,12 +384,20 @@ namespace ImGuiVRHelper::RuntimeOverlay
 						return nullptr;
 					}
 				}
+				for (auto& old : g_staging) {
+					if (old)
+						g_retiringStaging.push_back({ std::move(old), kStagingRetireFrames });
+				}
 				g_staging[0] = std::move(fresh[0]);
 				g_staging[1] = std::move(fresh[1]);
 				g_stagingW = srcDesc.Width;
 				g_stagingH = srcDesc.Height;
 				g_stagingNext = 0;
 			}
+			for (auto& retiring : g_retiringStaging)
+				--retiring.framesLeft;
+			std::erase_if(g_retiringStaging,
+				[](const RetiringTexture& r) { return r.framesLeft <= 0; });
 			auto target = g_staging[g_stagingNext];
 			g_stagingNext ^= 1;
 			d3dCtx->CopyResource(target.get(), src);
