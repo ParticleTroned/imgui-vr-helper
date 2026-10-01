@@ -17,6 +17,7 @@
 #include "OverlayDrag.h"
 #include "OverlayTinter.h"
 #include "PluginVersion.h"
+#include "RenderHost.h"
 #include "SettingsUI.h"
 #include "ToastHUD.h"
 #include "VRKeyboard.h"
@@ -635,6 +636,51 @@ namespace ImGuiVRHelper
 		Overlay::State::GetSingleton().repositionRequested = true;
 	}
 
+	ImGuiVRHelperPluginAPI::RenderHostResult HelperImpl::QueryRenderHostCapabilities(ImGuiVRHelperPluginAPI::RenderHostCapabilities* out)
+	{
+		return RenderHost::QueryCapabilities(out);
+	}
+
+	ImGuiVRHelperPluginAPI::RenderHostResult HelperImpl::RegisterRenderHost(const ImGuiVRHelperPluginAPI::RenderHostRegistration* registration, std::uint64_t* outHost)
+	{
+		return RenderHost::Register(registration, outHost);
+	}
+
+	ImGuiVRHelperPluginAPI::RenderHostResult HelperImpl::SetRenderHostActive(std::uint64_t host, std::uint32_t active)
+	{
+		return RenderHost::SetActive(host, active);
+	}
+
+	ImGuiVRHelperPluginAPI::RenderHostResult HelperImpl::QueryRenderHostContent(std::uint64_t host, ImGuiVRHelperPluginAPI::RenderHostContent* out)
+	{
+		return RenderHost::QueryContent(host, out);
+	}
+
+	ImGuiVRHelperPluginAPI::RenderHostResult HelperImpl::BeginHostedFrame(std::uint64_t host, const ImGuiVRHelperPluginAPI::HostedFrameInfo* frame, ImGuiVRHelperPluginAPI::HostedFrameHandle* out)
+	{
+		return RenderHost::Begin(host, frame, out);
+	}
+
+	ImGuiVRHelperPluginAPI::RenderHostResult HelperImpl::RenderHostedEye(std::uint64_t host, std::uint64_t cookie, const ImGuiVRHelperPluginAPI::HostedEyeContext* eye, ImGuiVRHelperPluginAPI::HostedEyeResult* out)
+	{
+		return RenderHost::RenderEye(host, cookie, eye, out);
+	}
+
+	ImGuiVRHelperPluginAPI::RenderHostResult HelperImpl::EndHostedFrame(std::uint64_t host, std::uint64_t cookie)
+	{
+		return RenderHost::End(host, cookie);
+	}
+
+	ImGuiVRHelperPluginAPI::RenderHostResult HelperImpl::AbortHostedFrame(std::uint64_t host, std::uint64_t cookie)
+	{
+		return RenderHost::End(host, cookie, true);
+	}
+
+	ImGuiVRHelperPluginAPI::RenderHostResult HelperImpl::UnregisterRenderHost(std::uint64_t host)
+	{
+		return RenderHost::Unregister(host);
+	}
+
 	std::vector<HelperImpl::WorldQuadClientSnapshot> HelperImpl::SnapshotWorldQuadClients()
 	{
 		std::vector<WorldQuadClientSnapshot> out;
@@ -656,6 +702,69 @@ namespace ImGuiVRHelper
 		std::scoped_lock lk{ m_mutex };
 		const auto it = m_clients.find(client_id);
 		return it != m_clients.end() ? it->second.flags : 0u;
+	}
+
+	void HelperImpl::QueryHostedContent(uint32_t& layers, uint32_t& worldQuadCount)
+	{
+		layers = 0;
+		worldQuadCount = 0;
+		std::scoped_lock lock{ m_mutex };
+		for (const auto& [id, rec] : m_clients) {
+			if (!rec.texture)
+				continue;
+			if (id == m_focused_client)
+				layers |= ImGuiVRHelperPluginAPI::RenderHostLayer_Panel;
+			if (id == m_rebind_client_id && ComboRecording::IsActive())
+				layers |= ImGuiVRHelperPluginAPI::RenderHostLayer_Modal;
+			if ((rec.flags & ImGuiVRHelperPluginAPI::kClientFlag_HUDMode) != 0 &&
+				id != m_rebind_client_id && !rec.hudForceDisabled &&
+				rec.lastPanelFrame != 0 && m_frameCounter - rec.lastPanelFrame <= 2)
+				layers |= ImGuiVRHelperPluginAPI::RenderHostLayer_HUD;
+			if ((rec.flags & ImGuiVRHelperPluginAPI::kClientFlag_WorldQuad) != 0 && !rec.worldQuads.empty()) {
+				layers |= ImGuiVRHelperPluginAPI::RenderHostLayer_World;
+				worldQuadCount += static_cast<uint32_t>(rec.worldQuads.size());
+			}
+		}
+	}
+
+	std::optional<HelperImpl::HostedClientSnapshot> HelperImpl::SnapshotHostedClients(bool includeWorld)
+	{
+		HostedClientSnapshot snapshot;
+		std::scoped_lock lock{ m_mutex };
+		snapshot.contentSerial = m_frameCounter;
+		if (m_hostedInputFrameSerial == m_frameCounter)
+			snapshot.inputFrame = m_hostedInputFrame;
+		constexpr std::size_t maxHostedWorldQuads = 16384;
+		std::size_t quadCount = 0;
+		for (const auto& [id, rec] : m_clients) {
+			if (includeWorld && (rec.flags & ImGuiVRHelperPluginAPI::kClientFlag_WorldQuad) != 0 && rec.texture) {
+				if (rec.worldQuads.size() > maxHostedWorldQuads - quadCount)
+					return std::nullopt;
+				quadCount += rec.worldQuads.size();
+			}
+		}
+		for (const auto& [id, rec] : m_clients) {
+			if (!rec.texture)
+				continue;
+			if (id == m_focused_client) {
+				snapshot.focusedClient = id;
+				snapshot.focusedFlags = rec.flags;
+				snapshot.panelTexture = rec.texture;
+			}
+			if (id == m_rebind_client_id && ComboRecording::IsActive())
+				snapshot.rebindTexture = rec.texture;
+			if ((rec.flags & ImGuiVRHelperPluginAPI::kClientFlag_HUDMode) != 0 &&
+				id != m_rebind_client_id && !rec.hudForceDisabled &&
+				rec.lastPanelFrame != 0 && m_frameCounter - rec.lastPanelFrame <= 2) {
+				snapshot.hudClients.push_back({ id, rec.texture });
+			}
+			if (includeWorld && (rec.flags & ImGuiVRHelperPluginAPI::kClientFlag_WorldQuad) != 0 && !rec.worldQuads.empty())
+				snapshot.worldClients.push_back({ id, rec.name, rec.texture, rec.worldQuads });
+		}
+		const auto registrationOrder = [](const auto& left, const auto& right) { return left.client_id < right.client_id; };
+		std::sort(snapshot.hudClients.begin(), snapshot.hudClients.end(), registrationOrder);
+		std::sort(snapshot.worldClients.begin(), snapshot.worldClients.end(), registrationOrder);
+		return snapshot;
 	}
 
 	uint32_t HelperImpl::GetFocusedClientId()
@@ -1892,6 +2001,11 @@ namespace ImGuiVRHelper
 		baseFrame.hud_depth = std::max(0.3f, Overlay::State::GetSingleton().settings.hudDepth);
 		baseFrame.hud_coverage = std::clamp(Overlay::State::GetSingleton().settings.hudCoverage,
 			Overlay::Config::kMinHUDCoverage, Overlay::Config::kMaxHUDCoverage);
+		if (RenderHost::IsActive()) {
+			std::scoped_lock lock{ m_mutex };
+			m_hostedInputFrame = baseFrame;
+			m_hostedInputFrameSerial = m_frameCounter;
+		}
 
 		// Drag state machine + combo recording before the focus reconciler,
 		// which treats ComboRecording::IsActive() as part of "self active".

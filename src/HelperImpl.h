@@ -12,9 +12,11 @@
 #include "ImGuiVRHelperAPI.h"
 #include "internal/InputLeases.h"
 
+#include <optional>
+
 namespace ImGuiVRHelper
 {
-	class HelperImpl final : public ImGuiVRHelperPluginAPI::IImGuiVRHelperInterface005
+	class HelperImpl final : public ImGuiVRHelperPluginAPI::IImGuiVRHelperInterface006
 	{
 	public:
 		static HelperImpl& GetSingleton();
@@ -68,6 +70,16 @@ namespace ImGuiVRHelper
 
 		// IImGuiVRHelperInterface005 (client-driven reposition drag).
 		void RequestReposition(uint32_t client_id) override;
+
+		ImGuiVRHelperPluginAPI::RenderHostResult QueryRenderHostCapabilities(ImGuiVRHelperPluginAPI::RenderHostCapabilities* out) override;
+		ImGuiVRHelperPluginAPI::RenderHostResult RegisterRenderHost(const ImGuiVRHelperPluginAPI::RenderHostRegistration* registration, std::uint64_t* outHost) override;
+		ImGuiVRHelperPluginAPI::RenderHostResult SetRenderHostActive(std::uint64_t host, std::uint32_t active) override;
+		ImGuiVRHelperPluginAPI::RenderHostResult QueryRenderHostContent(std::uint64_t host, ImGuiVRHelperPluginAPI::RenderHostContent* out) override;
+		ImGuiVRHelperPluginAPI::RenderHostResult BeginHostedFrame(std::uint64_t host, const ImGuiVRHelperPluginAPI::HostedFrameInfo* frame, ImGuiVRHelperPluginAPI::HostedFrameHandle* out) override;
+		ImGuiVRHelperPluginAPI::RenderHostResult RenderHostedEye(std::uint64_t host, std::uint64_t cookie, const ImGuiVRHelperPluginAPI::HostedEyeContext* eye, ImGuiVRHelperPluginAPI::HostedEyeResult* out) override;
+		ImGuiVRHelperPluginAPI::RenderHostResult EndHostedFrame(std::uint64_t host, std::uint64_t cookie) override;
+		ImGuiVRHelperPluginAPI::RenderHostResult AbortHostedFrame(std::uint64_t host, std::uint64_t cookie) override;
+		ImGuiVRHelperPluginAPI::RenderHostResult UnregisterRenderHost(std::uint64_t host) override;
 
 		// Helper-internal entry points (not part of the public API).
 
@@ -125,6 +137,24 @@ namespace ImGuiVRHelper
 			std::vector<ImGuiVRHelperPluginAPI::WorldQuad> quads;
 		};
 		std::vector<WorldQuadClientSnapshot> SnapshotWorldQuadClients();
+
+		struct HostedClientSnapshot
+		{
+			uint64_t contentSerial = 0;
+			uint32_t focusedClient = 0;
+			uint32_t focusedFlags = 0;
+			std::optional<ImGuiVRHelperPluginAPI::Frame> inputFrame;
+			winrt::com_ptr<ID3D11Texture2D> panelTexture;
+			winrt::com_ptr<ID3D11Texture2D> rebindTexture;
+			std::vector<HUDClientSnapshot> hudClients;
+			std::vector<WorldQuadClientSnapshot> worldClients;
+		};
+
+		/// Freeze registry content under one lock; texture pixels are copied afterward by the renderer.
+		std::optional<HostedClientSnapshot> SnapshotHostedClients(bool includeWorld);
+
+		/// Count candidates without invoking clients, allocating textures or copying their lists.
+		void QueryHostedContent(uint32_t& layers, uint32_t& worldQuadCount);
 
 		/// Snapshot of every registered client for diagnostic display.
 		/// Used by the helper's settings UI to show a 'Registered
@@ -276,6 +306,8 @@ namespace ImGuiVRHelper
 		ImGuiVRHelperPluginAPI::ComboId NextComboIdLocked();
 		uint32_t m_focused_client = 0;
 		uint64_t m_frameCounter = 0;  ///< ++ each DispatchFrame; HUD-idle skipping uses it
+		std::optional<ImGuiVRHelperPluginAPI::Frame> m_hostedInputFrame;
+		uint64_t m_hostedInputFrameSerial = 0;
 
 		/// Allocate (or return existing) per-client overlay texture
 		/// resources. Returns true on success, false if D3D isn't ready

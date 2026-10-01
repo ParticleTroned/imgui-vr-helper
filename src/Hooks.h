@@ -12,4 +12,7 @@ namespace ImGuiVRHelper::Hooks
 	/// the first frame renders. Allocates the trampoline and writes
 	/// thunk calls for BSGraphics::Renderer::InitD3D.
 	void Install();
+
+	/// Initialize ordinary dispatch/input services for an explicitly negotiated render-thread host.
+	bool EnsureHostedServices();
 }

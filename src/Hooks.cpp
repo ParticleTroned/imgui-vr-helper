@@ -27,6 +27,7 @@
 #include "InSceneOverlay.h"
 #include "Input.h"
 #include "OpenVRDetection.h"
+#include "RenderHost.h"
 #include "RuntimeOverlay.h"
 #include "SettingsUI.h"
 #include "VRKeyboard.h"
@@ -74,6 +75,7 @@ namespace ImGuiVRHelper::Hooks
 
 		HRESULT WINAPI hk_Present(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 		{
+			RenderHost::ObserveRenderThread();
 			const auto now = std::chrono::steady_clock::now();
 			float dt = 0.016f;  // sane default for the very first frame
 			if (g_lastPresentValid) {
@@ -93,7 +95,8 @@ namespace ImGuiVRHelper::Hooks
 				return hr;
 			}
 
-			MonitorCSHandoff();
+			if (!RenderHost::IsActive())
+				MonitorCSHandoff();
 
 			if (!InSceneOverlay::IsRenderPathDisabled()) {
 				// Latch the render path off (rather than crash) if a per-frame
@@ -510,6 +513,17 @@ namespace ImGuiVRHelper::Hooks
 
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
+	}
+
+	bool EnsureHostedServices()
+	{
+		if (!Globals::IsReady() || !RE::BSOpenVR::GetIVRCompositor())
+			return false;
+		if (!g_renderDecisionMade) {
+			InstallRenderPath();
+			g_renderDecisionMade = true;
+		}
+		return true;
 	}
 
 	void Install()

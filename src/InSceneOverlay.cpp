@@ -18,6 +18,7 @@
 #include "Overlay.h"
 #include "OverlayTinter.h"
 #include "RuntimeOverlay.h"
+#include "RenderHost.h"
 #include "VrikCompat.h"
 #include "internal/Detour.h"
 #include "internal/HUDGeometry.h"
@@ -889,7 +890,7 @@ float4 main(PS_INPUT input) : SV_TARGET
 				const vr::Texture_t* texture, const vr::VRTextureBounds_t* bounds,
 				vr::EVRSubmitFlags flags)
 			{
-				if (!g_renderDisabled.load(std::memory_order_relaxed) &&
+				if (!RenderHost::IsActive() && !g_renderDisabled.load(std::memory_order_relaxed) &&
 					texture && texture->handle && texture->eType == vr::TextureType_DirectX) {
 					// Guard against vrclient throwing std::system_error
 					// ("device or resource busy") under runtime contention. On
@@ -1850,6 +1851,14 @@ float4 main(PS_INPUT input) : SV_TARGET
 		RenderRebindPass(ctx, matrices, s);
 
 		backup.Restore(ctx);
+	}
+
+	winrt::com_ptr<ID3D11Texture2D> GetHostedCursorTexture(const Overlay::Settings& settings)
+	{
+		if (!InitResources())
+			return nullptr;
+		EnsureCursorColorCurrent(Globals::GetD3D().device, settings.cursorColor);
+		return settings.cursorStyle == Overlay::CursorStyle::Arrow ? g_res.cursorArrowTexture : g_res.cursorTexture;
 	}
 
 	void RenderCursorIntoPanel(ID3D11Texture2D* panel)

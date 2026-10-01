@@ -1,232 +1,235 @@
-# Optional renderer hosting
+# Optional CSX renderer hosting
 
-Status: CSX integration design and tested private foundation, 1 October 2026.
-This branch does not expose a renderer-host interface or claim to fix the
-reported FloatingSubtitles occlusion. Interfaces `001` through `005`, the
-client handshake, input ownership and autonomous submission remain intact.
+Status: implemented opt-in interface `006`, 1 October 2026. The helper owns
+client content and composition; CSX owns scene provenance, writable final
+images and compositor submission. The new path is active only after a CSX
+host explicitly registers and activates a valid token. Installing the
+helper, loading CSX or obtaining the interface does not activate it.
 
-Compatibility requirement: the implementation must not change behavior for
-other helper users. New code is confined to an explicitly negotiated CSX
-path. Merely installing this helper, loading CSX, or discovering an interface
-does not opt in. Other renderers and all legacy clients keep the existing
-path; there is no global replacement of their state handling or shaders.
-The legacy `RenderForEye`, `RenderCursorIntoPanel` and interfaces `001`
-through `005` retain their behavior. Future hosted entry points require a
-valid, active CSX host token. Failed negotiation or frame admission must not
-silently change the global rendering policy.
+Interfaces `001` through `005` retain their declarations and virtual slots.
+Existing clients continue to register panels, HUDs and world quads through
+those interfaces. The legacy standalone renderer and its shaders remain in
+place. The helper's Submit hook skips its automatic scene drawing only while
+the negotiated host is active. Ordinary dispatch, input and focus handling
+continue; host ownership does not set the render-failure latch.
 
-## Motivation and ownership
+This implementation addresses two source-level integration limitations:
+automatic drawing can precede another renderer's final image replacement,
+and scaling output coordinates cannot describe all separate-eye and atlas
+depth layouts. These observations do not establish the cause of a specific
+FloatingSubtitles defect. In-game reproduction remains a separate gate.
 
-A renderer can replace or reconstruct an eye image after the helper's
-automatic Submit hook has drawn onto it. The helper's world-depth lookup
-also assumes that scaling output coordinates describes the depth layout.
-That assumption cannot represent every separate-eye/atlas combination or
-different input and output projection. Both are source-level limitations;
-neither establishes the cause of a particular missing glyph.
+## Negotiation and ABI
 
-The proposed optional interface lets CSX select a writable
-final-eye target and supply matching depth and camera metadata. The host
-owns scene rendering, resource lifetime and actual compositor submission.
-The helper owns clients, textures, geometry, input and composition. Client
-mods such as FloatingSubtitles keep their existing interfaces. Standalone
-operation and Open Shaders' existing client integration remain supported.
+Use `GetImGuiVRHelperInterface006()`. It returns null when the helper is
+absent or predates revision `006`; do not gate on a build-number guess. The
+new interface extends the existing single-inheritance chain and appends
+methods after `005`. No old method is reordered or given new parameters.
 
-The host calls composition synchronously. Composition does not invoke client
-callbacks, update input, query fresh tracking poses or submit to OpenVR.
-An absent or older helper retains its existing behavior. Registration alone
-must not suppress autonomous drawing.
+[`ImGuiVRHelperRenderHost.h`](../api/ImGuiVRHelperRenderHost.h) defines the
+Windows x64 contract. It uses fixed-width integers, explicit enums, opaque
+nonzero tokens and POD descriptors. Compile-time checks fix sizes and
+important offsets. Every input and output structure must start with its
+default `structSize` and `contractVersion`; this revision accepts an exact
+size/version match. Reserved fields and unknown flag bits are rejected.
+Valid output structures are cleared before work, including failure returns.
+C++ exceptions are translated into result codes at the DLL boundary.
 
-## First change: test private state isolation
+Capabilities and registration are available before graphics initialization.
+Only `RenderHostKind::CSX` is supported, with one registered owner at a time.
+Registration reserves an inactive token. Unregister requires inactive
+ownership and no open frame, and invalidates that token. Registration and
+unregistration may occur off the render thread.
 
-Before exposing a new DLL boundary, a private scoped D3D11 state guard is
-implemented and exercised by the standalone fixture. The current renderer
-does not call it. It is reserved for the future CSX composition entry point,
-so this foundation changes no game rendering behavior. The guard restores
-bindings including null/default state and bindings the runtime would
-otherwise remove because of resource aliasing. It disables inherited
-geometry/tessellation shaders and predication during its scope, then restores
-state on normal return and C++ exception unwinding.
+The first existing Present callback establishes the render thread. Content
+queries, activation, deactivation and all frame operations must run on that
+thread. Calls made before it is observed return `NotReady`; another thread
+gets `WrongThread`. Activation also requires initialized graphics and the
+helper's rendering services. Activation changes only between pairs. A
+failed activation preserves the previous ownership policy. There is no
+automatic opt-in based on another module's presence.
 
-This is texture composition on a serialized immediate FL11.0+ context. It does not
-make concurrent context use safe, snapshot texture pixels, restore resource
-contents or protect against device removal. Stream-output state is outside
-the scope: the helper binds texture resources and disables the geometry
-shader. UAV counters are preserved when restoring bindings. Constant-buffer
-ranges are preserved where D3D11.1 offsetting is supported.
+## Pair lifecycle and failure policy
 
-The future CSX path must reject failed constant-buffer uploads before any
-dependent draw. The current world-quad depth upload can reuse stale data on
-failure; changing that legacy behavior is deliberately outside this branch.
+The host follows this sequence:
 
-The [Windows WARP fixture](../tests/d3d11/README.md) exercises the guard independently of Skyrim.
-The snapshot has a CPU cost, including retained COM references. No runtime
-performance claim is made; profile it with empty content, world text and an
-open panel before enabling it in the CSX path. Empty hosted composition must
-return before creating the guard. Non-CSX operation must not construct the
-guard, take pair snapshots or allocate hosted resources.
+1. Query candidate content between pairs. This works for a registered
+   inactive host and performs no graphics work or client callbacks.
+2. Activate at a render-thread pair boundary when its adapter can own the
+   final output route. Keep activation separate from whether one pair has
+   admissible world depth.
+3. Supply both eyes and complete scene metadata to `BeginHostedFrame`.
+   `Success` returns one cookie; `NoContent` and failures leave no open
+   frame. An accepted preparation consumes its pair token even if freezing
+   later fails.
+4. Draw each eye with `RenderHostedEye`, using the returned cookie, matching
+   pair and resource generation, a nonzero attempt ID and a compatible RTV.
+5. Call `EndHostedFrame` after both eyes finish, or `AbortHostedFrame` to
+   release an unfinished pair. `IncompletePair` from End still closes it.
 
-## Refined host contract
+Pair tokens must increase throughout a registration, including across
+activation toggles. Altering scene metadata does not make a consumed token
+fresh. Scene frame, resource generation and compositor cycle must be
+nonzero; invalid frame sentinels are rejected. These identifiers are host
+assertions: the helper cannot independently establish that a resource's
+pixels belong to the stated scene.
 
-### Freeze data and pixels for a stereo pair
+Nested frames, eye calls during preparation/rendering, and lifecycle
+changes during an open frame return `Busy`. Each successful eye may be
+drawn only once. At most four attempts are allowed per eye. Retries require
+both a new attempt ID and a different underlying target resource.
+Reusing another view of a written resource is not a fresh attempt. The
+capability query reports this bound.
 
-Existing clients can render outside the helper's callback and can use
-deferred contexts. A retained texture reference or a paused `DispatchFrame`
-does not freeze its contents. The implementation must either establish
-serialized GPU production for the full pair or copy admitted textures into
-bounded helper-owned pair snapshots before the first eye. Copies preserve
-legacy clients' writable panel handles and need a defined ordering after
-their writes; they do not repair unsynchronized immediate-context access.
+`HostedEyeResult::targetWritten` means the target is no longer a clean
+fallback. A later upload/device failure returns `PartialWrite` when a draw
+may already have changed it. End and Abort release helper ownership; they
+do not undo target pixels. The host must discard written failed targets.
+Neither method submits to OpenVR. CSX must compose both scratch eye images
+successfully before choosing either for its existing final Submit path, so
+an eye failure cannot publish half of a decorated stereo pair.
 
-Freeze the client/quad lists together under the registry lock, then release
-that lock before graphics work. Also freeze settings, focus and flags,
-world/room conversion, HMD/controller anchors, runtime-overlay eligibility,
-selected tinter textures and the rebind modal. Both eyes consume those same
-values. Do not equate helper Present ticks with the host's stereo-pair ID.
+## Frozen content and resource ownership
 
-Content reporting means admitted draw candidates. Legacy APIs do not expose
-a completed-paint fence or prove that a texture contains nontransparent
-pixels. Preserve the API's persistent world-quad lists until replaced or
-cleared by the client.
+Begin freezes the registry's admitted client/quad lists, settings, focus,
+panel eligibility, geometry, tinter choice and relevant anchors once for the
+pair. Both eyes use those values. HMD/world transforms come from the host's
+scene descriptor; controller anchors use the helper's cached ordinary input
+snapshot. Composition does not invoke client callbacks, poll fresh tracking
+poses, change input ownership or submit an image.
 
-### Admit both eyes before drawing either
+The registry snapshot retains COM references, then releases its lock before
+graphics work. Begin copies each selected panel texture into a helper-owned
+GPU texture on the serialized immediate context. Both eyes sample the copied
+pixels, not the client's mutable original. Snapshots are bounded to 256 MiB
+and 16,384 admitted world quads. Client panel sources must be compatible
+single-sample, single-slice RGBA8 textures. Snapshot failure rejects the
+pair; no target eye has been written at that point.
 
-The initial `BeginHostedFrame` design needs either both immutable depth/view
-descriptors or an explicit pair-wide admission decision backed by the host's
-preflight. Per-eye validation alone cannot retract an already presented
-first eye. Keep final writable RTVs borrowed for individual eye calls.
+The host must order Begin after client GPU writes. Copies preserve legacy
+writable panel handles but cannot repair unsynchronized immediate-context
+access or deferred command lists executed after the snapshot. Legacy client
+unregistration remains registry removal, not a callback-drain barrier.
 
-Use distinct scene identity, stereo-pair identity, resource generation,
-helper frame cookie and fresh-surface attempt identity. Define missing-eye
-closure, duplicate attempts and partial writes explicitly. An engine-frame
-number or retained COM pointer alone does not prove that color and depth
-contain matching scene data.
+The immediate context and admitted depth SRVs are retained internally until
+closure. The API still requires the host to keep their contents stable from
+Begin through End/Abort. Retaining COM objects is not a depth-pixel snapshot.
+Eye RTVs are borrowed only during their synchronous eye call. All resources
+must belong to the helper's initialized D3D11 device.
 
-### Explicit projection and encoding
+Content counts describe candidates, not nontransparent pixels or completed
+paint. Legacy APIs do not expose a paint-completion fence. Persistent world
+lists remain active until replaced or cleared by their client. Candidate
+queries can exceed the admitted snapshot limit; Begin is authoritative.
+Empty admitted content returns before constructing a graphics state guard.
 
-Project each tracking-space billboard point into both the final-color and
-depth cameras. Depth lookup uses the supplied positive active eye rectangle,
-not `SV_Position * globalScale`. Matrices use a documented row-vector
-convention and tests with asymmetric views, nonzero origins and both eyes.
-Output orientation and depth orientation are separate.
+## Coordinates, depth and color
 
-Decode depth with explicit checked rational coefficients into positive
-axial view distance in metres. Capture world scale and origin with the
-scene; do not read newer near/far, room or dynamic-resolution values during
-each eye draw. Invalid projected samples must not become zero-valued loads
-that fabricate near occluders. Unsupported or stale depth rejects world
-content for the pair under the production policy; valid panel/HUD content
-may still be admitted independently.
+Matrices are row-major doubles with row-vector multiplication. The host
+provides tracking-to-color-clip and tracking-to-depth-clip matrices per eye,
+using D3D clip depth `[0,1]`. World positions first subtract the captured
+`worldOrigin` before the captured `worldToTracking` transform; tracking units
+are metres. `headToTracking` uses the same tracking space. Float narrowing,
+nonfinite values and degenerate transforms are checked before shader use.
 
-Start with single-sample D3D11 2D RTV/SRV views, positive rectangles,
-validated mip dimensions and nonaliasing color/depth resources. Arrays,
-MSAA, stale/reprojected scenes and incomplete foveated depth regions need
-separate qualification, not silent interpretation.
+Color viewports have positive dimensions inside the declared target extent.
+Flip flags orient final color independently from depth. Depth has its own
+positive, half-open active rectangle in its SRV. The pixel shader projects
+each tracking-space billboard point into the depth camera and floors that
+point's normalized coordinates into the supplied rectangle. It does not
+map global `SV_Position` into a combined depth image. Separate color eyes
+may share an atlas depth SRV only with nonoverlapping eye rectangles.
 
-### Add the public ABI only when it works
+`trackingToDepthMetres` gives positive axial view distance, not Euclidean
+range. Native forward-Z samples decode as `scale / (offset - sample)`;
+positive linear samples decode as `scale * sample`, with zero offset. World
+occlusion uses a 0.02 metre bias. Invalid/out-of-rectangle projected samples
+skip comparison instead of loading a fabricated zero-depth occluder.
 
-`005` is the highest revision at the inspected helper baseline. Reserve no
-new public vtable until the complete hosted renderer and ownership
-controller work together. The next revision should append to the existing
-inheritance chain without changing old layouts or virtual slots.
+With `worldLayerEnabled=1`, Begin validates both complete depth descriptors.
+An invalid descriptor rejects the pair. A host that cannot prove matching
+world depth can submit a UI-only frame with that flag zero, preserving
+admissible panel/HUD/modal content. The development-only
+`DisableWorldDepthTest` flag bypasses comparisons but still requires valid
+world metadata; it is not a persistent occlusion workaround.
 
-Specify fixed-width fields, struct size/version checks, reserved bits,
-initialized outputs, bounded strings, opaque nonzero tokens, borrowing and
-exception translation. Activation belongs to the established render thread
-at pair boundaries. Reject nested frames and lifecycle transitions during
-an open frame. Keep negotiated ownership separate from the persistent
-render-failure latch so ordinary dispatch and input continue.
+The first contract supports feature level 11.0+, immediate contexts,
+single-sample 2D resources, mip-zero views and single-slice textures. Depth
+views support `R32_FLOAT`, `R24_UNORM_X8_TYPELESS`, `R16_UNORM`, and
+`R32_FLOAT_X8X24_TYPELESS`. Color RTVs support non-sRGB `R8G8B8A8_UNORM`,
+`B8G8R8A8_UNORM`, `R16G16B16A16_FLOAT`, `R10G10B10A2_UNORM` and
+`R11G11B10_FLOAT`. Extents, view dimensions, device identity and color/depth
+aliases are checked; snapshot textures cannot be targets. Arrays, MSAA and
+partial foveated depth coverage require a different admitted representation.
 
-One remaining client-lifecycle concern is that registry removal is not a
-callback-drain barrier: dispatch snapshots raw callback/user pointers. The
-host implementation must not rely on stronger unregister guarantees than
-the legacy API provides.
+Panel pixels are gamma encoded. `Gamma` preserves their RGB values;
+`Linear` converts RGB before blending into a linear target. The target view
+must not itself apply an sRGB encode. This does not infer the underlying
+scene's transfer function or perform HDR tonemapping; the host must declare
+the actual target convention.
 
-## CSX producer audit and integration boundary
+## D3D11 state isolation
 
-The helper fork and upstream `main` were checked at
-`91f63900d0e6896617dd326ce1feeb914308bc42`.
-The handover's CSX source was `dab1874a76fd39175dcefdc52110ba69d7284e12`.
-The locally available CSX checkout was instead branch `main-vr-nr`, commit
-`042b7c05d6d9efb82b90de1bdef8929c5b0403b5`. These are source identities,
-not identities of installed DLLs. Recheck the intended CSX integration base
-before implementing its adapter.
+Hosted preparation and drawing use the private scoped state guard. It
+restores null/default bindings, class-linked shaders, D3D11.1 constant-buffer
+ranges and bindings removed by runtime alias handling. Inherited geometry,
+tessellation and predication are disabled within the scope. Restoration
+runs on ordinary returns and C++ exception unwinding. Constant-buffer Map
+failure prevents the dependent draw.
 
-Read-only inspection of that local source adds these constraints:
+The guard preserves UAV counters while restoring bindings. It does not
+snapshot resource contents, recover a removed device or make concurrent
+context use safe. Stream-output state is outside this texture-only pass's
+scope; the geometry shader is disabled. Legacy rendering does not construct
+this guard or allocate hosted snapshots while no host is active. State
+capture and texture copies have a cost; no VR performance claim is made.
 
--   `EncodeTexturesCS.hlsl` copies native device depth unchanged into both
-    vendor intermediates. `vrIntermediateLinearDepth` is not evidence of
-    linear metres; its name must not select the decoding policy.
--   Foveated encoding can write only an ROI. Resource dimensions alone do not
-    establish current full-eye depth coverage. The completed opaque depth
-    selector is a candidate provider, subject to content-lifetime proof.
--   Physical render-scale mode forces engine dynamic ratios to one; classic
-    reduced-resolution mode uses different ratio/lock semantics. Capture
-    explicit rectangles rather than multiplying live ratios again.
--   Retained neural outputs exist on this branch. A successful vendor-return
-    value or current observation frame does not automatically admit current
-    world geometry over those images.
--   The central retained Submit packet preserves lifetime, complete OpenVR
-    payloads and presentation acknowledgements. Integrate before that existing
-    boundary with typed candidate eligibility. Do not decorate protected,
-    loading, quarantined or retained continuity outputs by default.
--   Current presentation copies are SRV/UAV-only and gated on CSX-owned
-    content. Hosted raster work needs compatible RTV capability and independent
-    helper-content gating, including native rendering with the CSX menu closed.
+## Validation and remaining runtime gates
 
-## Remaining implementation and evidence
+The implementation starts from helper source
+`91f63900d0e6896617dd326ce1feeb914308bc42`. The separate CSX adapter starts
+from `main-VR` source `dab1874a76fd39175dcefdc52110ba69d7284e12`. Source
+identities alone are not identities of installed DLLs.
 
-1. Implement and test the private ownership controller, complete pair
-   snapshots and explicit projection/depth renderer. Include synthetic
-   off-ray and true-occluder cases, both eyes, state/error paths and a bounded
-   development depth-bypass control.
-2. Expose the next additive interface with ABI checks and an independently
-   built old `005` client fixture. Test both hook-installation orders,
-   activation, deactivation, failure, standalone dispatch and input.
-3. Add the separately reviewed CSX adapter using a pinned API-only
-   dependency, authoritative producer packet and final-eye composition on
-   safe writable surfaces. Preserve existing presentation policy and
-   complete OpenVR metadata.
-4. Reproduce the reported subtitle scene and compare native/vendor paths,
-   Open Shaders, true occlusion and both eyes. Record exact builds, settings,
-   capture provenance, lifecycle stress and measured CPU/GPU cost. Follow
-   CSX's qualification requirements for its affected render-scale code.
+Executed locally with xmake `3.0.9+HEAD.2b184e178`, Visual Studio 2026 and the
+Windows SDK, with both plugin deployment environment variables cleared:
 
-No game deployment, subtitle reproduction, old-client binary test, CSX
-adapter test or performance measurement is implied by this foundation.
-The separate host implementation must complete those applicable gates before
-being described as an interoperability fix.
-
-## Foundation validation
-
-Executed on Windows with xmake `3.0.9+HEAD.2b184e178`, Visual Studio 2026,
-and the Windows SDK. Source base is the helper commit above plus this
-foundation. Raw build/test output remains local under `build/validation/`.
-
--   `xmake f -P tests/d3d11 -F xmake.lua -m release`: passed using the
-    standalone project, without resolving plugin dependencies.
--   `xmake build -P tests/d3d11 -F xmake.lua ImGuiVRHelperD3DTests`: passed.
--   `xmake run -P tests/d3d11 -F xmake.lua ImGuiVRHelperD3DTests`: all 14
-    scenarios passed, seven each at feature levels 11.1 and 11.0. The debug
-    layer was enabled for both and reported no warnings or errors. High UAV
-    slots were exercised on 11.1 and correctly inapplicable on 11.0.
--   `xmake build -y ImGuiVRHelper`: passed in `release` mode with SE, AE and
-    VR support enabled. Both deployment environment variables were cleared;
-    the build reported no deployment target.
+-   `xmake build -y ImGuiVRHelper`: compiled and linked the hosted helper.
+    Log: `build/validation/hosted-helper-build.txt`.
 -   `xmake build -y ImGuiVRHelperTests` and `xmake run ImGuiVRHelperTests`:
-    passed, 38 assertions in eight existing headless cases.
--   Repository pre-commit hooks: passed on the changed files only.
--   Diff audit: existing renderer, hooks, public API, helper implementation
-    and dependency lockfile remain unchanged. The new guard has no production
-    call sites.
+    138 assertions in 16 headless lifecycle, ABI-layout and existing math
+    cases passed. Log: `build/validation/hosted-headless-run.txt`.
+-   The `001` through `005` API declaration prefix matches the baseline
+    exactly, excluding only the new header include and appended `006`.
+-   From `tests/d3d11`, `xmake build -P . -F xmake.lua ImGuiVRHelperHostedD3DTests`
+    and `xmake run -P . -F xmake.lua ImGuiVRHelperHostedD3DTests`: passed using
+    the actual production shader source and constants. Both eyes with separate
+    color targets/shared atlas depth passed off-ray and true-occluder checks
+    for native and linear depth. A deliberately wrong global mapping erased
+    the synthetic glyph, confirming the fixture detects that failure class.
+    Cropped depth, flipped output, invalid projection, diagnostic bypass and
+    explicit Gamma/Linear transfer passed. The debug layer emitted no warnings
+    or errors. Logs: `build/validation/hosted-shader-{build,run}.txt`.
+-   The independent state-guard WARP fixture previously passed all 14
+    scenarios, seven each at feature levels 11.1 and 11.0, with the debug layer
+    enabled and no warnings/errors. High UAV slots were exercised on 11.1 and
+    inapplicable on 11.0. See the [fixture instructions](../tests/d3d11/README.md).
+-   Scoped whitespace, line-ending, large-file, EOF, clang-format and
+    Prettier checks passed. The StyLua hook installer hit a release-download
+    connection reset; the existing StyLua 2.5.2 binary independently passed
+    `--check --config-path stylua.toml tests/d3d11/target.lua`.
 
-The local VS2026 configuration caused xmake to regenerate its dependency
-resolution keys. The DLL/headless builds used that saved local resolution
-(including ImGui 1.92.7, Catch2 3.15.2 and OpenVR 2.15.6); they are not proof
-of a build against the original lockfile's exact versions. The original
-lockfile was restored and no dependency update is included in this change.
-The standalone D3D fixture depends only on the Windows SDK.
+The local xmake dependency resolution includes ImGui 1.92.7, Catch2 3.15.2
+and OpenVR 2.15.6. These builds do not prove the original lockfile's exact
+dependency versions. No dependency update is intended by this change.
 
-The final local DLL was 4,837,888 bytes, SHA-256
-`3AC1B3197CA7F5BC588E55D9EDB8683415E1ABC3AB7E865995F2013826D52F39`.
-It was not installed or loaded into Skyrim. Game/runtime compatibility and
-performance remain untested; this patch introduces no runtime integration.
+These checks do not validate a loaded old `005` binary, both hook-install
+orders, activation/deactivation in Skyrim, Open Shaders coexistence, client
+callback concurrency, device-loss recovery, actual headset output or VR
+frame cost. Runtime qualification must reproduce the reported subtitle
+scene and a true occluder on native and vendor routes, inspect both eyes,
+exercise ordinary standalone/input behavior, and record exact installed
+builds and capture provenance. The CSX adapter must separately prove scene
+provenance and retained-output exclusion, preserve complete OpenVR payloads,
+and meet its affected render-scale qualification requirements. No game
+deployment or measured interoperability fix is implied by the local tests.

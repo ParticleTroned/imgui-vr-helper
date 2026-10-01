@@ -25,6 +25,7 @@
 #include <SKSE/SKSE.h>
 
 #include "ImGuiVRHelperInput.h"
+#include "ImGuiVRHelperRenderHost.h"
 #include "ImGuiVRHelperTypes.h"
 
 namespace ImGuiVRHelperPluginAPI
@@ -296,5 +297,32 @@ namespace ImGuiVRHelperPluginAPI
 
 	/// Handshake for revision 005. Returns nullptr if the installed helper predates 005.
 	IImGuiVRHelperInterface005* GetImGuiVRHelperInterface005();
+
+	/// Revision 006 adds explicitly negotiated CSX composition without changing legacy clients.
+	/// Render-thread methods are synchronous; no client callbacks or OpenVR submission occur within them.
+	struct IImGuiVRHelperInterface006 : IImGuiVRHelperInterface005
+	{
+		/// Available before renderer initialization; outputs require their default size and version fields.
+		virtual RenderHostResult QueryRenderHostCapabilities(RenderHostCapabilities* out) = 0;
+		/// Registration reserves an inactive owner and leaves autonomous rendering enabled.
+		virtual RenderHostResult RegisterRenderHost(const RenderHostRegistration* registration, std::uint64_t* outHost) = 0;
+		/// Activate/deactivate only on the established render thread between stereo pairs.
+		virtual RenderHostResult SetRenderHostActive(std::uint64_t host, std::uint32_t active) = 0;
+		/// Render-thread candidate query between pairs; allowed for registered inactive hosts.
+		virtual RenderHostResult QueryRenderHostContent(std::uint64_t host, RenderHostContent* out) = 0;
+		/// Validates both eyes and freezes content; Success returns a cookie that must be closed.
+		virtual RenderHostResult BeginHostedFrame(std::uint64_t host, const HostedFrameInfo* frame, HostedFrameHandle* out) = 0;
+		/// Draws one eye synchronously; a failed written target must be discarded by the host.
+		virtual RenderHostResult RenderHostedEye(std::uint64_t host, std::uint64_t cookie, const HostedEyeContext* eye, HostedEyeResult* out) = 0;
+		/// Closes a prepared frame between eye calls; IncompletePair also closes when an eye did not finish.
+		virtual RenderHostResult EndHostedFrame(std::uint64_t host, std::uint64_t cookie) = 0;
+		/// Releases a prepared frame without submission; the host must discard any already written targets.
+		virtual RenderHostResult AbortHostedFrame(std::uint64_t host, std::uint64_t cookie) = 0;
+		/// Requires inactive ownership and no open frame; lifecycle registration may occur off the render thread.
+		virtual RenderHostResult UnregisterRenderHost(std::uint64_t host) = 0;
+	};
+
+	/// Returns nullptr against an absent or older helper; never gates on GetBuildNumber.
+	IImGuiVRHelperInterface006* GetImGuiVRHelperInterface006();
 
 }  // namespace ImGuiVRHelperPluginAPI

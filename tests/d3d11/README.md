@@ -1,36 +1,50 @@
-# D3D11 state regression fixture
+# D3D11 hosted-rendering regression fixtures
 
-This independent Windows executable validates the private state guard for
-the planned opt-in CSX renderer path. No production renderer currently calls
-that guard. See the [design and compatibility contract](../../docs/renderer-host-design.md).
+These independent Windows executables validate the state guard and actual
+hosted shader source used by the explicitly activated CSX path. See the
+[ownership and compatibility contract](../../docs/renderer-host-design.md).
 
-The fixture needs xmake, Visual Studio with the C++ workload, and the Windows
-SDK. WARP supplies a software D3D11 device; no game, headset, CommonLib or
-client mods are needed. Run from the repository root:
+They need xmake, Visual Studio with the C++ workload, and the Windows SDK.
+WARP supplies a software D3D11 device; no game, headset, CommonLib or client
+mods are needed. Run from this `tests/d3d11` directory:
 
 ```sh
-xmake f -P tests/d3d11 -F xmake.lua -m release
-xmake build -P tests/d3d11 -F xmake.lua ImGuiVRHelperD3DTests
-xmake run -P tests/d3d11 -F xmake.lua ImGuiVRHelperD3DTests
+xmake f -P . -F xmake.lua -m release
+xmake build -P . -F xmake.lua ImGuiVRHelperD3DTests
+xmake run -P . -F xmake.lua ImGuiVRHelperD3DTests
+xmake build -P . -F xmake.lua ImGuiVRHelperHostedD3DTests
+xmake run -P . -F xmake.lua ImGuiVRHelperHostedD3DTests
 ```
 
-Both `-P` and `-F` select the nested standalone project explicitly. Without
-the file argument xmake can discover the parent plugin project. The same
-`ImGuiVRHelperD3DTests` target is also available from the root project after
-its dependencies are configured; it is excluded from the headless test glob.
-Neither test target has the plugin's deployment hook.
+The explicit project and file arguments select this standalone project.
+Omitting the file argument can discover the parent plugin project and alter
+its local configuration. Both targets are also available from the root
+project after its dependencies are configured and are excluded from the
+headless test glob. Neither target has the plugin's deployment hook.
 
-Install Windows Graphics Tools for debug-layer validation. The executable
-reports whether that layer was available; a run without it cannot validate
-the absence of D3D11 warnings. Supported runs fail on any debug-layer warning
-or error. Shader fixtures compile through the Windows SDK's D3D compiler.
+Install Windows Graphics Tools for debug-layer validation. Each executable
+reports when that layer is unavailable; that run cannot validate the
+absence of D3D11 warnings. Debug-enabled runs fail on warnings or errors.
+Shader fixtures compile through the Windows SDK's D3D compiler.
 
-Coverage includes null and nondefault bindings, C++ exception unwinding,
-class-linked pixel shaders, constant-buffer ranges, inherited predication
-and geometry/tessellation shaders, all-stage SRV aliases, OM/CS UAV bindings
-and append counters. Scissor rectangles and unrelated sampler slots serve
-as sentinels for state that the guard must leave untouched.
+The state fixture covers null and nondefault bindings, C++ exception
+unwinding, class-linked pixel shaders, constant-buffer ranges, inherited
+predication and geometry/tessellation shaders, all-stage SRV aliases,
+OM/CS UAV bindings and append counters. Scissor rectangles and unrelated
+sampler slots are sentinels for state the guard must leave untouched. It
+runs at feature levels 11.1 and 11.0 where available.
 
-This fixture checks binding correctness. It does not validate subtitle
-occlusion, actual hosted drawing, old client binaries, headset output or VR
-performance.
+The hosted shader fixture compiles `HostedOverlayShaders.h` directly and
+uses its production constants. A synthetic glyph is rendered into separate
+eye targets against shared atlas depth. Off-ray nearer geometry must leave
+the glyph intact, while a true nearer occluder removes it. A deliberately
+wrong global coordinate mapping must damage that glyph, providing a
+positive control for the regression. Further checks cover native forward-Z
+and positive linear depth, cropped rectangles, independently flipped color,
+invalid projected depth, explicit Gamma/Linear transfer and the development
+depth-comparison bypass. Tests read back the resulting color pixels.
+
+These fixtures test state binding and shader behavior in controlled D3D11
+inputs. They do not run the complete helper snapshot/controller path, prove
+scene provenance, load legacy client binaries, reproduce a Skyrim subtitle
+scene or measure headset output and VR performance.

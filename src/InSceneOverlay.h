@@ -14,8 +14,11 @@
 
 #include <SimpleMath.h>
 #include <openvr.h>
+#include <memory>
+#include <winrt/base.h>
 
 #include "Overlay.h"
+#include "ImGuiVRHelperRenderHost.h"
 
 struct ID3D11Texture2D;
 
@@ -50,6 +53,25 @@ namespace ImGuiVRHelper::InSceneOverlay
 	/// texture needs D3D11_BIND_RENDER_TARGET. Render thread only. No-op
 	/// while the wand is off the panel.
 	void RenderCursorIntoPanel(ID3D11Texture2D* panel);
+
+	struct HostedFrame;
+
+	/// Freeze admitted clients, pixels and geometry once for an explicitly hosted stereo pair.
+	std::shared_ptr<HostedFrame> PrepareHostedFrame(
+		const ImGuiVRHelperPluginAPI::HostedFrameInfo& frame,
+		ImGuiVRHelperPluginAPI::RenderHostContent& content,
+		ImGuiVRHelperPluginAPI::RenderHostResult& result);
+
+	/// Compose frozen content without consulting live helper or engine state.
+	ImGuiVRHelperPluginAPI::RenderHostResult RenderHostedEye(
+		const HostedFrame& frame, const ImGuiVRHelperPluginAPI::HostedEyeContext& eye,
+		ImGuiVRHelperPluginAPI::HostedEyeResult& result);
+
+	/// Read candidate counts without graphics calls or client callbacks.
+	ImGuiVRHelperPluginAPI::RenderHostContent QueryHostedContent();
+
+	/// Retain the current helper cursor artwork for a hosted pair's private pixel copy.
+	winrt::com_ptr<ID3D11Texture2D> GetHostedCursorTexture(const Overlay::Settings& settings);
 
 	/// Render-path fault latch. Disabled when another VR overlay host (e.g.
 	/// Community Shaders) already owns the in-scene overlay, or when a vrclient
