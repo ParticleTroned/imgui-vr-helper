@@ -3,8 +3,8 @@
 
 #include "pch.h"
 
-#include "InSceneOverlay.h"
 #include "HelperImpl.h"
+#include "InSceneOverlay.h"
 #include "OverlayTinter.h"
 #include "RuntimeOverlay.h"
 #include "internal/D3D11ResourceName.h"
@@ -14,10 +14,10 @@
 #include "internal/ScopedD3D11State.h"
 #include "internal/VRUtils.h"
 
-#include <d3dcompiler.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <d3dcompiler.h>
 #include <limits>
 
 #if defined(_MSC_VER)
@@ -199,7 +199,7 @@ namespace ImGuiVRHelper::InSceneOverlay
 		bool RectWithin(const API::RenderHostRect& rect, UINT width, UINT height)
 		{
 			return rect.width && rect.height && rect.x <= width && rect.y <= height &&
-				rect.width <= width - rect.x && rect.height <= height - rect.y;
+			       rect.width <= width - rect.x && rect.height <= height - rect.y;
 		}
 
 		bool ValidateScene(const API::HostedFrameInfo& frame)
@@ -211,8 +211,8 @@ namespace ImGuiVRHelper::InSceneOverlay
 				frame.headToTracking[11] != 0 || frame.headToTracking[15] != 1)
 				return false;
 			if (frame.worldLayerEnabled && (!InvertibleMatrix(frame.worldToTracking) ||
-				frame.worldToTracking[3] != 0 || frame.worldToTracking[7] != 0 ||
-				frame.worldToTracking[11] != 0 || frame.worldToTracking[15] != 1))
+											   frame.worldToTracking[3] != 0 || frame.worldToTracking[7] != 0 ||
+											   frame.worldToTracking[11] != 0 || frame.worldToTracking[15] != 1))
 				return false;
 			for (double origin : frame.worldOrigin) {
 				if (!std::isfinite(origin))
@@ -475,8 +475,8 @@ namespace ImGuiVRHelper::InSceneOverlay
 					double tracking[3]{};
 					for (std::size_t axis = 0; axis < 3; ++axis) {
 						tracking[axis] = relative[0] * frame.worldToTracking[axis] +
-							relative[1] * frame.worldToTracking[4 + axis] +
-							relative[2] * frame.worldToTracking[8 + axis] + frame.worldToTracking[12 + axis];
+						                 relative[1] * frame.worldToTracking[4 + axis] +
+						                 relative[2] * frame.worldToTracking[8 + axis] + frame.worldToTracking[12 + axis];
 					}
 					Vector3 center;
 					if (!CopyFinite(tracking, &center.x, 3))
@@ -495,9 +495,15 @@ namespace ImGuiVRHelper::InSceneOverlay
 					right.Normalize();
 					const Vector3 up = forward.Cross(right);
 					Matrix rotation = Matrix::Identity;
-					rotation._11 = right.x; rotation._12 = right.y; rotation._13 = right.z;
-					rotation._21 = up.x; rotation._22 = up.y; rotation._23 = up.z;
-					rotation._31 = forward.x; rotation._32 = forward.y; rotation._33 = forward.z;
+					rotation._11 = right.x;
+					rotation._12 = right.y;
+					rotation._13 = right.z;
+					rotation._21 = up.x;
+					rotation._22 = up.y;
+					rotation._23 = up.z;
+					rotation._31 = forward.x;
+					rotation._32 = forward.y;
+					rotation._33 = forward.z;
 					const Matrix model = Matrix::CreateScale(static_cast<float>(width), quad.height_m, 1) * rotation * Matrix::CreateTranslation(center);
 					if (!builder.Add(client.texture.get(), model, API::RenderHostLayer_World, { du, dv, quad.u0, quad.v0 }))
 						return false;
@@ -510,7 +516,7 @@ namespace ImGuiVRHelper::InSceneOverlay
 			const Overlay::Settings& settings, bool leftHanded)
 		{
 			if (!clients.inputFrame || (settings.attachController != API::InputDeviceType::Primary &&
-				settings.attachController != API::InputDeviceType::Secondary))
+										   settings.attachController != API::InputDeviceType::Secondary))
 				return std::nullopt;
 			const bool left = settings.attachController == API::InputDeviceType::Primary ? leftHanded : !leftHanded;
 			const auto& hand = left ? clients.inputFrame->left : clients.inputFrame->right;
@@ -522,7 +528,7 @@ namespace ImGuiVRHelper::InSceneOverlay
 				return std::nullopt;
 			rotation.Normalize();
 			const Matrix model = Matrix::CreateTranslation(settings.controllerOffsetX, settings.controllerOffsetY, settings.controllerOffsetZ) *
-				Matrix::CreateFromQuaternion(rotation) * Matrix::CreateTranslation(pose.pos[0], pose.pos[1], pose.pos[2]);
+			                     Matrix::CreateFromQuaternion(rotation) * Matrix::CreateTranslation(pose.pos[0], pose.pos[1], pose.pos[2]);
 			if (!FiniteMatrix(model))
 				return std::nullopt;
 			return model;
@@ -546,7 +552,7 @@ namespace ImGuiVRHelper::InSceneOverlay
 			std::optional<Matrix> anchors[2];
 			if (settings.attachMode == Overlay::AttachMode::HMDOnly || settings.attachMode == Overlay::AttachMode::Both) {
 				anchors[0] = settings.positioningMethod == Overlay::PositioningMethod::FixedWorld ? state.fixedWorld.m :
-					Matrix::CreateTranslation(settings.hmdOffsetX, settings.hmdOffsetY, settings.hmdOffsetZ) * head;
+				                                                                                    Matrix::CreateTranslation(settings.hmdOffsetX, settings.hmdOffsetY, settings.hmdOffsetZ) * head;
 			}
 			if (settings.attachMode == Overlay::AttachMode::ControllerOnly || settings.attachMode == Overlay::AttachMode::Both) {
 				anchors[1] = ControllerAnchor(clients, settings, state.lastKnownLeftHandedMode);
@@ -570,9 +576,9 @@ namespace ImGuiVRHelper::InSceneOverlay
 				return true;
 			const float size = 0.016f * settings.cursorSize;
 			const Matrix marker = Matrix::CreateScale(size, size / Overlay::Config::kOverlayAspect, 1) *
-				Matrix::CreateTranslation(wand.uvCoordinatesX.load(std::memory_order_relaxed) - 0.5f,
-					0.5f - wand.uvCoordinatesY.load(std::memory_order_relaxed), 0) *
-				Overlay::Config::CreateScaleMatrix(settings.menuScale) * *anchor;
+			                      Matrix::CreateTranslation(wand.uvCoordinatesX.load(std::memory_order_relaxed) - 0.5f,
+									  0.5f - wand.uvCoordinatesY.load(std::memory_order_relaxed), 0) *
+			                      Overlay::Config::CreateScaleMatrix(settings.menuScale) * *anchor;
 			const auto cursor = GetHostedCursorTexture(settings);
 			return cursor && builder.Add(cursor.get(), marker, API::RenderHostLayer_Panel);
 		}
@@ -587,7 +593,7 @@ namespace ImGuiVRHelper::InSceneOverlay
 			const auto quad = ComputeHUDQuad(left, right, depth,
 				std::clamp(settings.hudCoverage, Overlay::Config::kMinHUDCoverage, Overlay::Config::kMaxHUDCoverage));
 			const Matrix model = Matrix::CreateScale(quad.width, quad.height, 1) *
-				Matrix::CreateTranslation(0, quad.centerY, -depth) * head;
+			                     Matrix::CreateTranslation(0, quad.centerY, -depth) * head;
 			if (!FiniteMatrix(model))
 				return std::nullopt;
 			return model;
@@ -716,7 +722,9 @@ namespace ImGuiVRHelper::InSceneOverlay
 			std::memcpy(constants.model, &draw.model._11, sizeof(constants.model));
 			std::memcpy(constants.uvTransform, draw.uv.data(), sizeof(constants.uvTransform));
 			constants.options[0] = draw.layer == API::RenderHostLayer_World &&
-				(frame.description.diagnostics & API::RenderHostDiagnostic_DisableWorldDepthTest) == 0 ? 1.0f : 0.0f;
+			                               (frame.description.diagnostics & API::RenderHostDiagnostic_DisableWorldDepthTest) == 0 ?
+			                           1.0f :
+			                           0.0f;
 			D3D11_MAPPED_SUBRESOURCE mapped{};
 			if (FAILED(context->Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
 				return result.targetWritten ? API::RenderHostResult::PartialWrite : API::RenderHostResult::RenderFailure;
