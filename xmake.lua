@@ -164,3 +164,6 @@ add_packages("catch2", "directxtk")
 -- compiles against), not the xrepo openvr package (which nests it as openvr/).
 add_includedirs("src", "api", "lib/commonlibsse-ng/extern/openvr/headers")
 add_files("tests/**.cpp")
+remove_files("tests/d3d11/**.cpp")
+
+includes("tests/d3d11/target.lua")

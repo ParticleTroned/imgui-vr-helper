@@ -1,0 +1,11 @@
+-- SPDX-License-Identifier: GPL-3.0-or-later WITH LicenseRef-Modding-Exception
+
+target("ImGuiVRHelperD3DTests")
+set_kind("binary")
+set_default(false)
+set_group("tests")
+set_languages("c++20")
+set_warnings("allextra")
+add_includedirs("../../src")
+add_files("test_pipeline_state.cpp")
+add_syslinks("d3d11", "d3dcompiler", "dxguid")
