@@ -49,6 +49,20 @@ helper's rendering services. Activation changes only between pairs. A
 failed activation preserves the previous ownership policy. There is no
 automatic opt-in based on another module's presence.
 
+## Automatic client operation
+
+External clients such as FloatingSubtitles register and receive their
+ordinary callbacks without opening the helper's settings UI. With a
+compatible CSX host and helper installed, using those clients requires no
+helper menu toggle, visibility state, welcome interaction, HUD demo or
+rebinding setup. Host registration and activation are performed by the CSX
+adapter through interface `006`.
+
+The helper's own UI remains optional and available. Hosting does not disable
+its settings, welcome, toast, demo or rebind layers, or change the existing
+client interfaces. Settings that govern client panel geometry and placement
+still apply. Standalone behavior is unchanged when no host is active.
+
 ## Pair lifecycle and failure policy
 
 The host follows this sequence:
@@ -229,7 +243,9 @@ callback concurrency, device-loss recovery, actual headset output or VR
 frame cost. Runtime qualification must reproduce the reported subtitle
 scene and a true occluder on native and vendor routes, inspect both eyes,
 exercise ordinary standalone/input behavior, and record exact installed
-builds and capture provenance. The CSX adapter must separately prove scene
-provenance and retained-output exclusion, preserve complete OpenVR payloads,
-and meet its affected render-scale qualification requirements. No game
+builds and capture provenance. An external-client hosted smoke test needs
+no helper UI setup; opening the helper menu or drawing its demo is not
+evidence that FloatingSubtitles works. The CSX adapter must separately prove
+scene provenance and retained-output exclusion, preserve complete OpenVR
+payloads, and meet its affected render-scale qualification requirements. No game
 deployment or measured interoperability fix is implied by the local tests.

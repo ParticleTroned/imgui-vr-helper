@@ -48,3 +48,10 @@ These fixtures test state binding and shader behavior in controlled D3D11
 inputs. They do not run the complete helper snapshot/controller path, prove
 scene provenance, load legacy client binaries, reproduce a Skyrim subtitle
 scene or measure headset output and VR performance.
+
+Neither these fixtures nor an external-client hosted smoke test requires
+opening, configuring or exercising the helper's own UI. Its optional UI
+remains available. Use the actual external client, such as FloatingSubtitles,
+for a game check; the helper's HUD demo does not validate that client's
+callbacks or content. These fixtures do not validate automatic client
+operation or activation/deactivation in Skyrim.
