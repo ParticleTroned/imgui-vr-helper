@@ -69,7 +69,6 @@ TEST_CASE("Render host registration is explicit and does not suppress legacy ren
 	REQUIRE(duplicate == 0);
 	REQUIRE(controller.SetActive(token, kRenderThread, true) == Result::NotReady);
 	controller.ObserveRenderThread(kRenderThread);
-	controller.ObserveRenderThread(99);
 	REQUIRE(controller.SetActive(token, 99, true) == Result::WrongThread);
 	REQUIRE(controller.SetActive(token + 1, kRenderThread, true) == Result::InvalidToken);
 	REQUIRE_FALSE(controller.IsActive());
@@ -81,6 +80,48 @@ TEST_CASE("Render host registration is explicit and does not suppress legacy ren
 	REQUIRE(controller.Register(API::RenderHostKind::CSX, replacement) == Result::Success);
 	REQUIRE(replacement != token);
 	REQUIRE(controller.SetActive(token, kRenderThread, true) == Result::InvalidToken);
+}
+
+TEST_CASE("Present thread changes recover hosting between stereo frames", "[render-host]")
+{
+	ActiveHost host;
+	const auto cookie = host.Begin();
+	REQUIRE(host.controller.End(host.token, cookie, kRenderThread, false) == Result::IncompletePair);
+
+	host.controller.ObserveRenderThread(99);
+	REQUIRE(host.controller.CheckHost(host.token, kRenderThread) == Result::WrongThread);
+	REQUIRE(host.controller.CheckHost(host.token, 99) == Result::Success);
+	REQUIRE(host.controller.IsActive());
+	host.controller.ObserveRenderThread(0);
+	REQUIRE(host.controller.CheckHost(host.token, 99) == Result::Success);
+
+	std::uint64_t nextCookie = 0;
+	REQUIRE(host.controller.Begin(host.token, 99, Frame(8), nextCookie) == Result::Success);
+	host.controller.FinishBegin(true);
+	REQUIRE(host.controller.End(host.token, nextCookie, 99, true) == Result::Success);
+	host.controller.ObserveRenderThread(kRenderThread);
+	REQUIRE(host.controller.CheckHost(host.token, kRenderThread) == Result::Success);
+	REQUIRE(host.controller.CheckHost(host.token, 99) == Result::WrongThread);
+}
+
+TEST_CASE("Observed thread changes never transfer an open stereo frame", "[render-host]")
+{
+	ActiveHost host;
+	std::uint64_t cookie = 0;
+	REQUIRE(host.controller.Begin(host.token, kRenderThread, Frame(), cookie) == Result::Success);
+	host.controller.ObserveRenderThread(99);
+	REQUIRE(host.controller.CheckHost(host.token, 99) == Result::WrongThread);
+	host.controller.FinishBegin(true);
+	host.controller.ObserveRenderThread(99);
+	REQUIRE(host.controller.CheckFrame(host.token, cookie, kRenderThread) == Result::Success);
+	REQUIRE(host.controller.CheckFrame(host.token, cookie, 99) == Result::WrongThread);
+	REQUIRE(host.controller.StartEye(host.token, cookie, kRenderThread, Eye(0), 100) == Result::Success);
+	host.controller.ObserveRenderThread(99);
+	REQUIRE(host.controller.End(host.token, cookie, 99, true) == Result::WrongThread);
+	host.controller.FinishEye(0, Result::Success);
+	REQUIRE(host.controller.End(host.token, cookie, kRenderThread, true) == Result::Success);
+	host.controller.ObserveRenderThread(99);
+	REQUIRE(host.controller.CheckHost(host.token, 99) == Result::Success);
 }
 
 TEST_CASE("Open hosted frames reject nested work and lifecycle transitions", "[render-host]")

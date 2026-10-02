@@ -57,8 +57,7 @@ namespace ImGuiVRHelper::RenderHost
 
 	void ObserveRenderThread() noexcept
 	{
-		std::uint32_t unset = 0;
-		g_renderThread.compare_exchange_strong(unset, GetCurrentThreadId(), std::memory_order_release);
+		g_renderThread.store(GetCurrentThreadId(), std::memory_order_release);
 	}
 
 	bool IsActive() noexcept { return g_active.load(std::memory_order_acquire); }

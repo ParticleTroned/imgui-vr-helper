@@ -8,7 +8,7 @@
 namespace ImGuiVRHelper::RenderHost
 {
 	namespace API = ImGuiVRHelperPluginAPI;
-	/// Called by the existing Present hook; observing a thread never activates hosting.
+	/// Observes the game swapchain's current Present thread without activating hosting or transferring an open pair.
 	void ObserveRenderThread() noexcept;
 	[[nodiscard]] bool IsActive() noexcept;
 	API::RenderHostResult QueryCapabilities(API::RenderHostCapabilities* out) noexcept;

@@ -18,9 +18,10 @@ namespace ImGuiVRHelper::Internal
 		using Result = ImGuiVRHelperPluginAPI::RenderHostResult;
 		static constexpr std::uint32_t kMaxAttemptsPerEye = 4;
 
+		/// Follow the game's Present thread only between frames; an open pair keeps its owner.
 		void ObserveRenderThread(std::uint32_t thread) noexcept
 		{
-			if (!renderThread_)
+			if (thread && !HasFrame())
 				renderThread_ = thread;
 		}
 

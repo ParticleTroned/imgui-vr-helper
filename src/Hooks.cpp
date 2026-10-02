@@ -75,7 +75,8 @@ namespace ImGuiVRHelper::Hooks
 
 		HRESULT WINAPI hk_Present(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 		{
-			RenderHost::ObserveRenderThread();
+			if (This == Globals::GetD3D().swapchain)
+				RenderHost::ObserveRenderThread();
 			const auto now = std::chrono::steady_clock::now();
 			float dt = 0.016f;  // sane default for the very first frame
 			if (g_lastPresentValid) {

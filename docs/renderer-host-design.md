@@ -41,12 +41,18 @@ Registration reserves an inactive token. Unregister requires inactive
 ownership and no open frame, and invalidates that token. Registration and
 unregistration may occur off the render thread.
 
-The first existing Present callback establishes the render thread. Content
-queries, activation, deactivation and all frame operations must run on that
-thread. Calls made before it is observed return `NotReady`; another thread
-gets `WrongThread`. Activation also requires initialized graphics and the
-helper's rendering services. Activation changes only between pairs. A
-failed activation preserves the previous ownership policy. There is no
+The game swapchain's existing Present callback observes the current render
+thread. Between hosted frames, the host follows that observed thread so
+loading-to-gameplay thread changes do not permanently reject content.
+Unrelated swapchains cannot change this observation. Content queries,
+activation, deactivation and frame operations must use the observed thread;
+calls before observation return `NotReady`, and other threads receive
+`WrongThread`. An open stereo frame retains its original thread through
+End/Abort, including during preparation and eye rendering. A later observed
+thread is admitted only after that frame closes. Activation also requires
+initialized graphics and the helper's rendering services. Activation changes
+only between pairs. A failed activation preserves the previous ownership
+policy. There is no
 automatic opt-in based on another module's presence.
 
 ## Automatic client operation
@@ -249,3 +255,28 @@ evidence that FloatingSubtitles works. The CSX adapter must separately prove
 scene provenance and retained-output exclusion, preserve complete OpenVR
 payloads, and meet its affected render-scale qualification requirements. No game
 deployment or measured interoperability fix is implied by the local tests.
+
+### Present-thread migration regression
+
+The 2026-10-02 Skyrim VR test used helper source
+`cfa60e7df6b3c5513ef11e71bb30fab336ae58ed` and CSX source
+`8350014001083abf31236f994a161de0693d56b1`, with CSX Build ID
+`2379480fccfa2cac3c224d13826dcf0c381c6641eab385b5d6d7b81bc558e3bc`.
+The installed DLLs matched their package hashes. The host composed 10,390
+pairs on thread 65544, then rejected content queries with `WrongThread`
+on thread 13536 after loading. Composition stopped advancing. The helper
+had permanently retained the first observed Present thread.
+
+The host now follows the current game Present thread between pairs while
+preserving an open pair's owner. Two regression cases failed against the
+old policy. After the correction, `xmake build --yes ImGuiVRHelperTests`
+and `xmake run ImGuiVRHelperTests` passed all 18 cases and 160 assertions,
+including migration in both directions, ignored zero observations and
+rejection of ownership transfer during preparation and eye rendering.
+The change uses the existing CSX-only hosting contract and requires no
+helper menu interaction. The legacy rendering path is unchanged.
+
+The fixed DLL still needs a fresh game session and both-eye subtitle
+validation. The original session successfully activated Saadia through
+DevBench, but the capture ended with partial artifact-publication failures;
+it is diagnostic evidence, not a visual qualification pass.
